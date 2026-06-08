@@ -46,7 +46,7 @@ class ThreatLevel(Enum):
 
 @dataclass
 class GameState:
-    """Persistent game state structure"""
+    """Persistent game state structure tracking global metrics and active sessions"""
     tutorial_completed: bool = False
     highest_chapter_unlocked: int = 1
     total_score: int = 0
@@ -57,6 +57,17 @@ class GameState:
     })
     achievements: List[str] = field(default_factory=list)
     high_scores: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # --- ADD THESE ACTIVE SESSION PROPERTIES ---
+    active_chapter_number: Optional[int] = None
+    active_time_remaining: Optional[int] = None
+    active_score: Optional[int] = None
+    active_attempts: int = 0
+    active_trapped: bool = False
+    active_tools_used: List[str] = field(default_factory=list)
+    active_filters: List[str] = field(default_factory=list)
+    active_logs: List[Dict[str, Any]] = field(default_factory=list)
+    active_malicious_ips: List[str] = field(default_factory=list)
 
 @dataclass
 class ChapterConfig:
@@ -147,565 +158,41 @@ def load_game() -> GameState:
         try:
             with open(SAVE_FILE, 'r') as f:
                 data = json.load(f)
-                return GameState(**data)
-        except (json.JSONDecodeError, TypeError):
-            # Corrupted save file, create new
-            pass
-    
-    # Create new save
-    state = GameState()
-    save_game(state)
-    return state
-
-def save_game(state: GameState) -> None:
-    """Save game state to file"""
-    with open(SAVE_FILE, 'w') as f:
-        json.dump(asdict(state), f, indent=2)
-
-# ================== Log Generation ==================
-
-class LogGenerator:
-    """Generates realistic network traffic logs"""
-    
-    BENIGN_DOMAINS = [
-        "google.com", "microsoft.com", "amazon.com", "cloudflare.com",
-        "github.com", "stackoverflow.com", "wikipedia.org", "office365.com"
-    ]
-    
-    SUSPICIOUS_DOMAINS = [
-        "temp-analytics.tk", "secure-update.ml", "system-check.ga",
-        "windows-defender.cf", "chrome-extension.tk"
-    ]
-    
-    USER_AGENTS = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64) Firefox/89.0",
-        "python-requests/2.25.1",
-        "curl/7.68.0"
-    ]
-    
-    @staticmethod
-    def generate_ip(malicious: bool = False) -> str:
-        """Generate a realistic IP address"""
-        if malicious:
-            # Generate suspicious IP ranges
-            prefixes = ["185.220", "195.123", "162.247", "104.248"]
-            prefix = random.choice(prefixes)
-            return f"{prefix}.{random.randint(1, 254)}.{random.randint(1, 254)}"
-        else:
-            # Generate local/common IP ranges
-            ranges = [
-                (192, 168, random.randint(1, 10)),
-                (10, 0, random.randint(1, 10)),
-                (172, 16, random.randint(1, 10))
-            ]
-            r = random.choice(ranges)
-            return f"{r[0]}.{r[1]}.{r[2]}.{random.randint(1, 254)}"
-    
-    @staticmethod
-    def generate_logs(config: ChapterConfig) -> Tuple[List[Dict], List[str]]:
-        """Generate logs for a chapter and return logs + malicious IPs"""
-        logs = []
-        malicious_ips = []
-        
-        # Generate malicious IPs
-        for _ in range(config.malicious_ip_count):
-            ip = LogGenerator.generate_ip(malicious=True)
-            malicious_ips.append(ip)
-        
-        # Generate timestamp base
-        base_time = datetime.now() - timedelta(minutes=30)
-        
-        # Generate logs
-        for i in range(config.log_count):
-            timestamp = base_time + timedelta(seconds=i * 60)
-            
-            # Determine if this log should be malicious
-            is_malicious = i < config.malicious_ip_count * 3 and random.random() < 0.3
-            
-            if is_malicious and malicious_ips:
-                src_ip = random.choice(malicious_ips)
-                dst_port = config.target_port if random.random() < 0.5 else random.choice([443, 80, 22, 3389])
-                protocol = "TCP"
-                size = random.randint(5000, 50000)  # Larger sizes for exfiltration
-                action = "ALERT" if random.random() < 0.7 else "ALLOW"
-                domain = random.choice(LogGenerator.SUSPICIOUS_DOMAINS)
-            else:
-                src_ip = LogGenerator.generate_ip(malicious=False)
-                dst_port = random.choice([80, 443, 22, 53, 445, 3389])
-                protocol = random.choice(["TCP", "UDP", "ICMP"])
-                size = random.randint(100, 5000)
-                action = "ALLOW"
-                domain = random.choice(LogGenerator.BENIGN_DOMAINS)
-            
-            log_entry = {
-                "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                "src_ip": src_ip,
-                "dst_ip": LogGenerator.generate_ip(malicious=False),
-                "src_port": random.randint(1024, 65535),
-                "dst_port": dst_port,
-                "protocol": protocol,
-                "size": size,
-                "action": action,
-                "user_agent": random.choice(LogGenerator.USER_AGENTS),
-                "domain": domain
-            }
-            
-            logs.append(log_entry)
-        
-        # Shuffle logs
-        random.shuffle(logs)
-        
-        return logs, malicious_ips
-
-# ================== Forensic Tools Implementation ==================
-
-class ForensicTools:
-    """Implementation of forensic analysis tools"""
-    
-    @staticmethod
-    def inspect_ip(ip: str, malicious_ips: List[str], keyword: str) -> Tuple[bool, str]:
-        """Inspect an IP address - returns (is_trap, content)"""
-        if ip in malicious_ips:
-            return True, "TRAP: Direct connection to C2 server detected!"
-        else:
-            # Generate mock webpage with hidden keyword
-            content = f"""
-            <!DOCTYPE html>
-            <html>
-            <head><title>Corporate Portal</title></head>
-            <body>
-                <h1>Welcome to Internal Resources</h1>
-                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
-                <p>System maintenance scheduled for next week.</p>
-                <!-- Debug: {keyword.upper()} vulnerability assessment pending -->
-                <p>Please update your credentials regularly.</p>
-                <footer>© 2024 Corporate IT Department</footer>
-            </body>
-            </html>
-            """
-            return False, content
-    
-    @staticmethod
-    def vtscan(target: str, malicious_ips: List[str]) -> Dict[str, Any]:
-        """Simulate VirusTotal scan results"""
-        is_malicious = target in malicious_ips
-        
-        if is_malicious:
-            return {
-                "threat_score": random.randint(75, 95),
-                "detection_ratio": f"{random.randint(45, 65)}/70",
-                "threat_level": ThreatLevel.MALICIOUS,
-                "malware_families": ["Emotet", "TrickBot", "Cobalt Strike"],
-                "geo_location": random.choice(["Russia", "China", "North Korea", "Unknown"]),
-                "asn": f"AS{random.randint(10000, 99999)}",
-                "first_seen": "2023-01-15",
-                "ssl_cert": "Self-signed",
-                "reputation": "MALICIOUS"
-            }
-        else:
-            return {
-                "threat_score": random.randint(0, 25),
-                "detection_ratio": "0/70",
-                "threat_level": ThreatLevel.SAFE,
-                "malware_families": [],
-                "geo_location": random.choice(["United States", "Germany", "United Kingdom"]),
-                "asn": f"AS{random.randint(1000, 9999)}",
-                "first_seen": "2020-06-10",
-                "ssl_cert": "Valid",
-                "reputation": "CLEAN"
-            }
-    
-    @staticmethod
-    def decode_string(encoded: str, expected: str) -> bool:
-        """Check if decoded string matches expected vulnerability keyword"""
-        decoded = encoded.lower().strip()
-        expected = expected.lower().strip()
-        
-        # Accept multiple formats
-        variations = [
-            expected,
-            expected.replace("_", ""),
-            expected.replace("-", ""),
-            expected.upper(),
-            expected.capitalize()
-        ]
-        
-        return decoded in variations
-
-# ================== Tutorial Screen ==================
-
-class TutorialScreen(Screen):
-    """Interactive tutorial for new players"""
-    
-    CSS = """
-    TutorialScreen {
-        align: center middle;
-    }
-    
-    .tutorial-container {
-        width: 80%;
-        height: 80%;
-        border: thick $primary;
-        padding: 2;
-    }
-    
-    .tutorial-title {
-        text-align: center;
-        text-style: bold;
-        color: $success;
-        margin-bottom: 1;
-    }
-    
-    .tutorial-content {
-        height: 60%;
-        border: solid $primary;
-        padding: 1;
-        margin: 1;
-    }
-    
-    .tutorial-commands {
-        height: 20%;
-        border: solid $secondary;
-        padding: 1;
-        margin: 1;
-    }
-    
-    .tutorial-input {
-        dock: bottom;
-        height: 3;
-        margin: 1;
-    }
-    """
-    
-    def __init__(self, game_state: GameState):
-        super().__init__()
-        self.game_state = game_state
-        self.current_module = 1
-        self.max_modules = 4
-        
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        
-        with Container(classes="tutorial-container"):
-            yield Static("🎓 SANDBOX TRAINING ENVIRONMENT 🎓", classes="tutorial-title")
-            yield Static(self.get_module_content(), classes="tutorial-content", id="content")
-            yield Static(self.get_available_commands(), classes="tutorial-commands", id="commands")
-            yield Input(placeholder="Enter command...", classes="tutorial-input", id="tutorial-input")
-            
-        yield Footer()
-    
-    def get_module_content(self) -> str:
-        """Get content for current tutorial module"""
-        modules = {
-            1: """MODULE 1: BASIC COMMANDS
-            
-Welcome to The Forensics Briefing training environment!
-
-You've detected suspicious network activity. Let's learn the basic investigation tools:
-
-Sample Logs:
-[2024-01-15 10:23:45] 192.168.1.100 -> 10.0.0.5:443 (HTTPS) [1024 bytes]
-[2024-01-15 10:23:46] 185.220.101.45 -> 192.168.1.100:445 (SMB) [ALERT]
-[2024-01-15 10:23:47] 192.168.1.100 -> 8.8.8.8:53 (DNS) [256 bytes]
-
-Try: inspect 192.168.1.100
-Try: decode shellshock""",
-            
-            2: """MODULE 2: VIRUSTOTAL SCANNER
-
-Excellent! Now let's learn about threat intelligence scanning.
-
-The 'vtscan' command queries threat databases to identify malicious indicators:
-- Green (0-30): Safe
-- Yellow (31-70): Suspicious  
-- Red (71-100): Malicious
-
-New suspicious IP detected: 185.220.101.45
-
-Try: vtscan 185.220.101.45""",
-            
-            3: """MODULE 3: SIEM FILTERING
-
-Great work! Now let's filter the noise from our logs.
-
-The 'filter' command helps you focus on specific traffic patterns:
-- filter port=445 (Show only SMB traffic)
-- filter action=ALERT (Show only alerts)
-- filter size>1000 (Show large transfers)
-
-Try: filter port=445
-Try: filter action=ALERT""",
-            
-            4: """MODULE 4: PATTERN MATCHING
-
-Almost done! Let's learn about pattern searching.
-
-The 'search' command finds specific patterns in logs:
-- search suspicious_ports (Find known bad ports)
-- search data_exfil (Find large outbound transfers)
-- search encoded (Find encoded strings)
-
-Try: search suspicious_ports
-
-After this module, you'll be ready for real investigations!"""
-        }
-        
-        return modules.get(self.current_module, "Module complete!")
-    
-    def get_available_commands(self) -> str:
-        """Get available commands for current module"""
-        commands = {
-            1: "Available: inspect <IP> | decode <string> | help",
-            2: "Available: inspect | decode | vtscan <target> | help",
-            3: "Available: inspect | decode | vtscan | filter <expression> | help",
-            4: "Available: ALL COMMANDS UNLOCKED | Type 'help' for full list"
-        }
-        
-        return f"📋 {commands.get(self.current_module, 'All commands available')}"
-    
-    @on(Input.Submitted)
-    async def handle_command(self, event: Input.Submitted) -> None:
-        """Process tutorial commands"""
-        command = event.value.strip().lower()
-        input_widget = self.query_one("#tutorial-input", Input)
-        input_widget.clear()
-        
-        content_widget = self.query_one("#content", Static)
-        
-        # Process commands based on current module
-        if command.startswith("inspect"):
-            if self.current_module >= 1:
-                content_widget.update("✅ Good! You inspected an IP. In real scenarios, be careful with malicious IPs!")
-                if self.current_module == 1:
-                    self.advance_module()
-                    
-        elif command.startswith("decode"):
-            if self.current_module >= 1:
-                if "shellshock" in command:
-                    content_widget.update("✅ Correct! You decoded the vulnerability keyword!")
-                    if self.current_module == 1:
-                        self.advance_module()
-                        
-        elif command.startswith("vtscan"):
-            if self.current_module >= 2:
-                content_widget.update("✅ Excellent! You scanned for threats. Score: 85/100 - MALICIOUS!")
-                if self.current_module == 2:
-                    self.advance_module()
-                    
-        elif command.startswith("filter"):
-            if self.current_module >= 3:
-                content_widget.update("✅ Perfect! You filtered the logs. Found 3 matching entries.")
-                if self.current_module == 3:
-                    self.advance_module()
-                    
-        elif command.startswith("search"):
-            if self.current_module >= 4:
-                content_widget.update("✅ Outstanding! You mastered pattern searching!")
-                await self.complete_tutorial()
                 
-        elif command == "help":
-            content_widget.update(self.get_help_text())
-            
-        elif command == "skip":
-            await self.complete_tutorial()
-    
-    def advance_module(self) -> None:
-        """Advance to next tutorial module"""
-        self.current_module += 1
-        if self.current_module <= self.max_modules:
-            content_widget = self.query_one("#content", Static)
-            content_widget.update(self.get_module_content())
-            commands_widget = self.query_one("#commands", Static)
-            commands_widget.update(self.get_available_commands())
-    
-    def get_help_text(self) -> str:
-        """Get help text for current module"""
-        return """📚 HELP MENU
-        
-inspect <IP> - Examine an IP address for clues
-decode <string> - Decode an encrypted string
-vtscan <target> - Scan IP/hash/domain for threats
-filter <expr> - Filter logs by criteria
-search <pattern> - Search for patterns in logs
-help - Show this menu
-skip - Skip tutorial (not recommended for beginners)"""
-    
-    async def complete_tutorial(self) -> None:
-        """Complete tutorial and unlock tools"""
-        self.game_state.tutorial_completed = True
-        self.game_state.tools_unlocked = {
-            "virustotal": True,
-            "siem": True,
-            "regex": True
-        }
-        save_game(self.game_state)
-        await self.app.push_screen(DashboardScreen(self.game_state))
-
-#!/usr/bin/env python3
-"""
-The Forensics Briefing - Terminal User Interface Cybersecurity Game
-A production-ready, educational forensics investigation game
-Author: Staff Software Engineer & Lead Cyber Security Architect
-Version: 1.0.0
-"""
-
-import json
-import hashlib
-import time
-from datetime import datetime, timedelta
-from pathlib import Path
-import random
-import re
-import base64
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-
-from textual import on
-from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Header, Footer, Static, Input, Button, DataTable, Label
-from textual.widgets import ListView, ListItem, RichLog, Placeholder
-from textual.screen import Screen, ModalScreen
-from textual.reactive import reactive
-from textual.message import Message
-from textual.binding import Binding
-from textual.worker import Worker, get_current_worker
-
-# ================== Data Models & Enums ==================
-
-class Difficulty(Enum):
-    """Difficulty levels for chapters"""
-    BEGINNER = "BEGINNER"
-    INTERMEDIATE = "INTERMEDIATE"
-    ADVANCED = "ADVANCED"
-    EXPERT = "EXPERT"
-
-class ThreatLevel(Enum):
-    """Threat levels for security indicators"""
-    SAFE = "SAFE"
-    SUSPICIOUS = "SUSPICIOUS"
-    MALICIOUS = "MALICIOUS"
-
-@dataclass
-class GameState:
-    """Persistent game state structure"""
-    tutorial_completed: bool = False
-    highest_chapter_unlocked: int = 1
-    total_score: int = 0
-    tools_unlocked: Dict[str, bool] = field(default_factory=lambda: {
-        "virustotal": False,
-        "siem": False,
-        "regex": False
-    })
-    achievements: List[str] = field(default_factory=list)
-    high_scores: List[Dict[str, Any]] = field(default_factory=list)
-
-@dataclass
-class ChapterConfig:
-    """Configuration for each chapter"""
-    number: int
-    title: str
-    bulletin: str
-    difficulty: Difficulty
-    vulnerability_keyword: str
-    target_port: int
-    validation_hash: str
-    time_limit: int  # seconds
-    log_count: int
-    malicious_ip_count: int
-    
-# ================== Chapter Configurations ==================
-
-CHAPTERS = [
-    ChapterConfig(
-        number=1,
-        title="OPERATION GHOST_IN_THE_FINGER",
-        bulletin="An attacker has breached an old web server using a Linux command vulnerability. They are spawning rogue terminal channels to steal internal data. Your goal is to inspect the logs, find the external server managing this attack, look for clues hidden in the server's code, and decode the exploit name.",
-        difficulty=Difficulty.BEGINNER,
-        vulnerability_keyword="shellshock",
-        target_port=80,
-        validation_hash=hashlib.sha256(b"shellshock_bash_cve_2014_6271").hexdigest(),
-        time_limit=600,  # 10 minutes
-        log_count=15,
-        malicious_ip_count=1
-    ),
-    ChapterConfig(
-        number=2,
-        title="OPERATION CORRUPTED_HEART",
-        bulletin="Employees are opening a fake corporate email attachment that dropped a stealthy banking trojan onto our mail server. We need you to identify the malicious sender infrastructure, track down the active attack platform, and decode the name of this notorious malware family.",
-        difficulty=Difficulty.BEGINNER,
-        vulnerability_keyword="emotet",
-        target_port=25,
-        validation_hash=hashlib.sha256(b"emotet_trojan_banking").hexdigest(),
-        time_limit=600,
-        log_count=18,
-        malicious_ip_count=1
-    ),
-    ChapterConfig(
-        number=3,
-        title="OPERATION OLYMPIC_GAMES",
-        bulletin="Industrial telemetry reports indicate mechanical synchronization degradation within specialized infrastructure systems. Physical sensor registers show severe speed variances. Isolate rogue controller logic override packets.",
-        difficulty=Difficulty.INTERMEDIATE,
-        vulnerability_keyword="stuxnet",
-        target_port=502,  # Modbus port
-        validation_hash=hashlib.sha256(b"stuxnet_plc_natanz").hexdigest(),
-        time_limit=420,  # 7 minutes
-        log_count=20,
-        malicious_ip_count=2
-    ),
-    ChapterConfig(
-        number=4,
-        title="OPERATION GOLDEN_TICKET",
-        bulletin="Unauthorized adversary achieved domain administrative privilege inheritance across subnets without raising standard access tokens. Memory dump registers imply cleartext volatility. Hunt for credential extraction methodology.",
-        difficulty=Difficulty.ADVANCED,
-        vulnerability_keyword="mimikatz",
-        target_port=88,  # Kerberos
-        validation_hash=hashlib.sha256(b"mimikatz_kerberos_pth").hexdigest(),
-        time_limit=420,
-        log_count=25,
-        malicious_ip_count=3
-    ),
-    ChapterConfig(
-        number=5,
-        title="OPERATION BLUE_SHIELD",
-        bulletin="Automated file system locking mechanisms deploying simultaneously across global system nodes. Exploitations propagating laterally through legacy sharing loops. Locate the hardcoded domain kill-switch hook.",
-        difficulty=Difficulty.EXPERT,
-        vulnerability_keyword="wannacry",
-        target_port=445,  # SMB
-        validation_hash=hashlib.sha256(b"wannacry_eternalblue_ms17_010").hexdigest(),
-        time_limit=300,  # 5 minutes
-        log_count=30,
-        malicious_ip_count=3
-    )
-]
-
-# ================== Save/Load Functions ==================
-
-SAVE_FILE = Path("save_file.json")
-
-def load_game() -> GameState:
-    """Load game state from file or create new if doesn't exist"""
-    if SAVE_FILE.exists():
-        try:
-            with open(SAVE_FILE, 'r') as f:
-                data = json.load(f)
-                return GameState(**data)
-        except (json.JSONDecodeError, TypeError):
-            # Corrupted save file, create new
+                # Manually build the GameState to support old/missing keys cleanly
+                return GameState(
+                    tutorial_completed=data.get("tutorial_completed", False),
+                    highest_chapter_unlocked=data.get("highest_chapter_unlocked", 1),
+                    total_score=data.get("total_score", 0),
+                    tools_unlocked=data.get("tools_unlocked", {"virustotal": False, "siem": False, "regex": False}),
+                    achievements=data.get("achievements", []),
+                    high_scores=data.get("high_scores", []),
+                    
+                    # Session Restoration Fallbacks
+                    active_chapter_number=data.get("active_chapter_number"),
+                    active_time_remaining=data.get("active_time_remaining"),
+                    active_score=data.get("active_score"),
+                    active_attempts=data.get("active_attempts", 0),
+                    active_trapped=data.get("active_trapped", False),
+                    active_tools_used=data.get("active_tools_used", []),
+                    active_filters=data.get("active_filters", []),
+                    active_logs=data.get("active_logs", []),
+                    active_malicious_ips=data.get("active_malicious_ips", [])
+                )
+        except Exception:
             pass
     
-    # Create new save
     state = GameState()
     save_game(state)
     return state
 
 def save_game(state: GameState) -> None:
     """Save game state to file"""
-    with open(SAVE_FILE, 'w') as f:
-        json.dump(asdict(state), f, indent=2)
+    try:
+        with open(SAVE_FILE, 'w') as f:
+            json.dump(asdict(state), f, indent=2)
+    except Exception:
+        pass
 
 # ================== Log Generation ==================
 
@@ -1337,14 +824,28 @@ class GameScreen(Screen):
         super().__init__()
         self.game_state = game_state
         self.chapter = chapter
-        self.logs, self.malicious_ips = LogGenerator.generate_logs(chapter)
+        
+        # Check if we should restore an active saved snapshot for this chapter
+        if self.game_state.active_chapter_number == chapter.number and self.game_state.active_logs:
+            self.logs = self.game_state.active_logs
+            self.malicious_ips = self.game_state.active_malicious_ips
+            self.time_remaining = self.game_state.active_time_remaining
+            self.score = self.game_state.active_score
+            self.attempts = self.game_state.active_attempts
+            self.trapped = self.game_state.active_trapped
+            self.tools_used = set(self.game_state.active_tools_used)
+            self.active_filters = self.game_state.active_filters
+        else:
+            # Generate clean level parameters
+            self.logs, self.malicious_ips = LogGenerator.generate_logs(chapter)
+            self.time_remaining = chapter.time_limit
+            self.score = 100
+            self.attempts = 0
+            self.trapped = False
+            self.tools_used = set()
+            self.active_filters = []
+            
         self.start_time = time.time()
-        self.time_remaining = chapter.time_limit
-        self.score = 100  # Base score
-        self.attempts = 0
-        self.tools_used = set()
-        self.trapped = False
-        self.active_filters = []
         self.timer_handle = None
         self.is_paused = False
         
@@ -1419,11 +920,13 @@ class GameScreen(Screen):
             
         elif action == "reload":
             self.logs, self.malicious_ips = LogGenerator.generate_logs(self.chapter)
-            # Change Static to ScrollableContainer
+            
+            # Textual expects the Selector String first, then the Type
             log_panel = self.query_one("#log-panel", ScrollableContainer)
-            # Clear the container's old content and replace it with the new logs
             log_panel.remove_children()
             log_panel.mount(Static(self.format_logs()))
+            
+            output_log.write("🔄 [bold #f1fa8c]System Traffic Data Stream Repopulated/Reloaded.[/]")
             
         elif action == "restart":
             self.time_remaining = self.chapter.time_limit
@@ -1434,8 +937,11 @@ class GameScreen(Screen):
             self.active_filters.clear()
             self.logs, self.malicious_ips = LogGenerator.generate_logs(self.chapter)
             
-            log_panel = self.query_one("#log-panel", Static)
-            log_panel.update(self.format_logs())
+            # Textual expects the Selector String first, then the Type
+            log_panel = self.query_one("#log-panel", ScrollableContainer)
+            log_panel.remove_children()
+            log_panel.mount(Static(self.format_logs()))
+            
             output_log.clear()
             output_log.write("🔄 [bold #ff5555]Level Reset Complete.[/] Investigative matrix restored.")
             
@@ -1883,19 +1389,21 @@ class ForensicsBriefingApp(App):
     """
     
     TITLE = "The Forensics Briefing - Cyber Investigation Terminal"
-    SUB_TITLE = "Version 1.0.0 | CLASSIFIED"
+    SUB_TITLE = "Version 1.1.0 | CLASSIFIED"
     
     def __init__(self):
         super().__init__()
         self.game_state = load_game()
     
     async def on_mount(self) -> None:
-        """Initialize the application"""
+        """Initialize the application and handle session routing"""
         if not self.game_state.tutorial_completed:
-            # Show welcome modal
             self.push_screen(WelcomeModal(), callback=self.handle_welcome_response)
+        elif self.game_state.active_chapter_number is not None:
+            # Reconstruct the active level layout directly from file state
+            chapter = CHAPTERS[self.game_state.active_chapter_number - 1]
+            await self.push_screen(GameScreen(self.game_state, chapter))
         else:
-            # Go straight to dashboard
             self.push_screen(DashboardScreen(self.game_state))
     
     def handle_welcome_response(self, start_tutorial: bool) -> None:
@@ -1903,7 +1411,6 @@ class ForensicsBriefingApp(App):
         if start_tutorial:
             self.push_screen(TutorialScreen(self.game_state))
         else:
-            # Mark tutorial as completed and go to dashboard
             self.game_state.tutorial_completed = True
             self.game_state.tools_unlocked = {
                 "virustotal": True,

@@ -8,5 +8,14 @@
     "regex": true
   },
   "achievements": [],
-  "high_scores": []
+  "high_scores": [],
+  "active_chapter_number": null,
+  "active_time_remaining": null,
+  "active_score": null,
+  "active_attempts": 0,
+  "active_trapped": false,
+  "active_tools_used": [],
+  "active_filters": [],
+  "active_logs": [],
+  "active_malicious_ips": []
 }
