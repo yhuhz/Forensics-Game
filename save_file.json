@@ -1,0 +1,12 @@
+{
+  "tutorial_completed": true,
+  "highest_chapter_unlocked": 1,
+  "total_score": 0,
+  "tools_unlocked": {
+    "virustotal": true,
+    "siem": true,
+    "regex": true
+  },
+  "achievements": [],
+  "high_scores": []
+}
